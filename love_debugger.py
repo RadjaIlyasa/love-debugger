@@ -4,13 +4,22 @@ import os
 import sys
 import ctypes
 
+try:
+    from PIL import Image, ImageTk
+    HAS_PIL = True
+except ImportError:
+    HAS_PIL = False
+
+# --- Windows high-DPI awareness for crisp text rendering ---
 if sys.platform == "win32":
     try:
         ctypes.windll.shcore.SetProcessDpiAwareness(1)
     except Exception:
         pass
 
-TARGET_NAME = "Ilyasa"
+# --- Change this to customize the subject name shown on the
+# result screen (e.g. TARGET_NAME = "Sana"). ---
+TARGET_NAME = "YOU"
 
 
 class LoveDebugger:
@@ -22,6 +31,7 @@ class LoveDebugger:
         self.root.configure(bg="#0d1117")
         self.root.resizable(False, False)
 
+        # Center window on screen
         self.root.update_idletasks()
         sw = self.root.winfo_screenwidth()
         sh = self.root.winfo_screenheight()
@@ -29,10 +39,19 @@ class LoveDebugger:
         y = (sh - 500) // 2
         self.root.geometry(f"600x500+{x}+{y}")
 
+        # Clean shutdown flag
         self._closing = False
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
+        # =========================
+        # BOOT
+        # =========================
+
         self.progress = 0
+
+        # =========================
+        # DIAGNOSTIC
+        # =========================
 
         self.diagnostics = [
             "Checking CPU.......... OK",
@@ -43,6 +62,10 @@ class LoveDebugger:
         ]
 
         self.diagnostic_index = 0
+
+        # =========================
+        # INVESTIGATION
+        # =========================
 
         self.investigation = [
             "> Starting investigation...",
@@ -56,9 +79,15 @@ class LoveDebugger:
         self.investigation_progress = 0
         self.no_attempts = 0
 
+        # flag buat matiin loop glitch flash pas masuk scene final
         self.glitch_active = True
 
+        # Initialize shake offset so clear_screen can always reset it
         self._shake_offset = (0, 0)
+
+        # =========================
+        # CANVAS
+        # =========================
 
         self.canvas = tk.Canvas(
             root,
@@ -70,11 +99,56 @@ class LoveDebugger:
 
         self.canvas.pack()
 
+        # =========================
+        # ASSETS DIRECTORY
+        # =========================
+
         assets_dir = os.path.join(
             os.path.dirname(os.path.abspath(__file__)),
             "assets"
         )
 
+        # =========================
+        # AUDIO (SFX)
+        # =========================
+
+        self.sfx_click = None
+        self.sfx_error = None
+        try:
+            import pygame
+            pygame.mixer.init(frequency=44100, size=-16, channels=1, buffer=512)
+            click_path = os.path.join(assets_dir, "click.wav")
+            error_path = os.path.join(assets_dir, "error.wav")
+            if os.path.exists(click_path):
+                self.sfx_click = pygame.mixer.Sound(click_path)
+                self.sfx_click.set_volume(0.3)
+            if os.path.exists(error_path):
+                self.sfx_error = pygame.mixer.Sound(error_path)
+                self.sfx_error.set_volume(0.55)
+        except Exception:
+            pass
+
+        # =========================
+        # FADE TRANSITION ASSETS
+        # =========================
+
+        self.fade_frames = []
+        if HAS_PIL:
+            try:
+                # 7 alpha steps from 0 to 255 for smooth fade-in/fade-out
+                for i in range(7):
+                    alpha = int(255 * (i / 6))
+                    img = Image.new("RGBA", (600, 500), (13, 17, 23, alpha))
+                    self.fade_frames.append(ImageTk.PhotoImage(img))
+            except Exception:
+                self.fade_frames = []
+
+        # =========================
+        # MEME ASSETS & STICKERS
+        # =========================
+
+        # frame-frame Eminem buat efek "pop" (kecil -> besar) pas
+        # scene "Will you be mine?"
         try:
             self.eminem_frames = [
                 tk.PhotoImage(file=os.path.join(assets_dir, "eminem_40.png")),
@@ -85,23 +159,93 @@ class LoveDebugger:
         except Exception:
             self.eminem_frames = []
 
-        try:
-            self.img_crying_barbie = tk.PhotoImage(
-                file=os.path.join(assets_dir, "crying_barbie.png")
-            )
-        except Exception:
-            self.img_crying_barbie = None
+        # Dictionary sticker reaksi yang luas untuk eskalasi tombol NO
+        sticker_files = {
+            "side_eye": "side_eye.png",
+            "raised_eyebrow": "raised_eyebrow.png",
+            "clown": "clown.png",
+            "crying_barbie": "crying_barbie.png",
+            "pleading_face": "pleading_face.png",
+            "crying_cat": "crying_cat.png",
+            "donkey_face": "donkey_face.png",
+            "loudly_crying": "loudly_crying.png",
+            "skull": "skull.png",
+            "broken_heart": "broken_heart.png",
+        }
 
-        try:
-            self.img_donkey_face = tk.PhotoImage(
-                file=os.path.join(assets_dir, "donkey_face.png")
-            )
-        except Exception:
-            self.img_donkey_face = None
+        self.stickers = {}
+        for key, fname in sticker_files.items():
+            path = os.path.join(assets_dir, fname)
+            try:
+                if os.path.exists(path):
+                    self.stickers[key] = tk.PhotoImage(file=path)
+            except Exception:
+                pass
 
+        # mulai loop glitch flash (jalan terus sepanjang app hidup)
         self.random_glitch()
 
         self.show_boot_screen()
+
+    # =========================
+    # AUDIO HELPERS
+    # =========================
+
+    def play_typing_sfx(self):
+        if self.sfx_click and not self._closing:
+            try:
+                self.sfx_click.play()
+            except Exception:
+                pass
+
+    def play_error_sfx(self):
+        if self.sfx_error and not self._closing:
+            try:
+                self.sfx_error.play()
+            except Exception:
+                pass
+
+    # =========================
+    # FADE TRANSITION
+    # =========================
+
+    def fade_to(self, callback, step_ms=20):
+        """Transisi fade-to-black halus antar scene."""
+        if self._closing or not self.fade_frames:
+            callback()
+            return
+
+        overlay = self.canvas.create_image(0, 0, anchor="nw", image=self.fade_frames[0])
+
+        def step_out(idx):
+            if self._closing:
+                return
+            if idx < len(self.fade_frames):
+                self.canvas.itemconfig(overlay, image=self.fade_frames[idx])
+                self.canvas.tag_raise(overlay)
+                self.root.after(step_ms, lambda: step_out(idx + 1))
+            else:
+                # Layar sudah gelap penuh, load scene baru
+                callback()
+                # Buat overlay baru di atas konten baru, lalu fade in
+                in_overlay = self.canvas.create_image(0, 0, anchor="nw", image=self.fade_frames[-1])
+                step_in(in_overlay, len(self.fade_frames) - 1)
+
+        def step_in(in_overlay, idx):
+            if self._closing:
+                return
+            if idx >= 0:
+                self.canvas.itemconfig(in_overlay, image=self.fade_frames[idx])
+                self.canvas.tag_raise(in_overlay)
+                self.root.after(step_ms, lambda: step_in(in_overlay, idx - 1))
+            else:
+                self.canvas.delete(in_overlay)
+
+        step_out(0)
+
+    # =========================
+    # CLEAN SHUTDOWN
+    # =========================
 
     def _on_close(self):
         """Stop all animation loops and destroy the window cleanly."""
@@ -113,10 +257,18 @@ class LoveDebugger:
             self.hearts_active = False
         self.root.destroy()
 
+    # =========================
+    # CLEAR SCREEN
+    # =========================
+
     def clear_screen(self):
         self.canvas.delete("all")
         self._shake_offset = (0, 0)
         self.draw_scanlines()
+
+    # =========================
+    # SCANLINE (background texture)
+    # =========================
 
     def draw_scanlines(self):
         for y in range(0, 500, 4):
@@ -126,6 +278,10 @@ class LoveDebugger:
                 tags="scanline"
             )
         self.canvas.tag_lower("scanline")
+
+    # =========================
+    # GLITCH FLASH (random, jalan independen dari scene)
+    # =========================
 
     def random_glitch(self):
         if self._closing:
@@ -154,6 +310,10 @@ class LoveDebugger:
             self.random_glitch
         )
 
+    # =========================
+    # TYPEWRITER EFFECT
+    # =========================
+
     def typewriter(self, x, y, full_text, fill, font, callback=None, delay=22):
         if self._closing:
             return
@@ -166,6 +326,10 @@ class LoveDebugger:
 
         self.canvas.itemconfig(item, text=full_text[:index])
 
+        # Suara ketik setiap 2 karakter untuk ritme mekanikal yang pas
+        if index % 2 == 1:
+            self.play_typing_sfx()
+
         if index < len(full_text):
             self.root.after(
                 delay,
@@ -173,6 +337,10 @@ class LoveDebugger:
             )
         elif callback:
             callback()
+
+    # =========================
+    # SCREEN SHAKE EFFECT
+    # =========================
 
     def shake_screen(self, frames_left, magnitude=6):
         if self._closing:
@@ -193,6 +361,10 @@ class LoveDebugger:
 
         self.root.after(40, lambda: self.shake_screen(frames_left - 1, magnitude))
 
+    # =========================
+    # BOOT PROGRESS
+    # =========================
+
     def update_progress(self):
         if self._closing:
             return
@@ -212,7 +384,11 @@ class LoveDebugger:
         if self.progress < 100:
             self.root.after(50, self.update_progress)
         else:
-            self.root.after(500, self.run_diagnostics)
+            self.root.after(500, lambda: self.fade_to(self.run_diagnostics))
+
+    # =========================
+    # DIAGNOSTIC
+    # =========================
 
     def run_diagnostics(self):
         if self._closing:
@@ -232,6 +408,7 @@ class LoveDebugger:
 
         if "ERROR" in diagnostic:
             color = "#ff5555"
+            self.play_error_sfx()
         else:
             color = "#ffffff"
 
@@ -240,7 +417,7 @@ class LoveDebugger:
             if self.diagnostic_index < len(self.diagnostics):
                 self.root.after(150, self.run_diagnostics)
             else:
-                self.root.after(1000, self.show_anomaly)
+                self.root.after(1000, lambda: self.fade_to(self.show_anomaly))
 
         self.typewriter(
             300,
@@ -250,6 +427,10 @@ class LoveDebugger:
             ("Consolas", 12),
             callback=next_diagnostic
         )
+
+    # =========================
+    # ANOMALY
+    # =========================
 
     def show_anomaly(self):
         if self._closing:
@@ -291,10 +472,16 @@ class LoveDebugger:
 
         self.blinking = True
 
+        # Layar berguncang & error sound saat anomaly terdeteksi
+        self.play_error_sfx()
         self.shake_screen(frames_left=10, magnitude=6)
 
         self.root.after(500, self.blink_anomaly)
-        self.root.after(2000, self.run_investigation)
+        self.root.after(2000, lambda: self.fade_to(self.run_investigation))
+
+    # =========================
+    # ANOMALY BLINK
+    # =========================
 
     def blink_anomaly(self, state=True):
         if self._closing:
@@ -313,6 +500,10 @@ class LoveDebugger:
             300,
             lambda: self.blink_anomaly(not state)
         )
+
+    # =========================
+    # INVESTIGATION
+    # =========================
 
     def run_investigation(self):
         if self._closing:
@@ -339,6 +530,7 @@ class LoveDebugger:
                 font=("Consolas", 12)
             )
 
+            # Progress bar trough
             self.canvas.create_rectangle(
                 150, 180, 450, 200,
                 fill="",
@@ -377,7 +569,7 @@ class LoveDebugger:
             if self.investigation_index < len(self.investigation):
                 self.root.after(150, self.run_investigation)
             else:
-                self.root.after(1000, self.show_result)
+                self.root.after(1000, lambda: self.fade_to(self.show_result))
 
         self.typewriter(
             300,
@@ -387,6 +579,10 @@ class LoveDebugger:
             ("Consolas", 12),
             callback=next_investigation
         )
+
+    # =========================
+    # RESULT
+    # =========================
 
     def show_result(self):
         if self._closing:
@@ -451,7 +647,11 @@ class LoveDebugger:
                 font=("Consolas", 16, "bold")
             )
 
-            self.root.after(2000, self.show_confession)
+            self.root.after(2000, lambda: self.fade_to(self.show_confession))
+
+    # =========================
+    # CONFESSION
+    # =========================
 
     def show_confession(self):
         if self._closing:
@@ -461,9 +661,9 @@ class LoveDebugger:
 
         self.no_meme_item = None
 
-        if hasattr(self, "yes_button"):
+        if hasattr(self, "yes_button") and self.yes_button.winfo_exists():
             self.yes_button.destroy()
-        if hasattr(self, "no_button"):
+        if hasattr(self, "no_button") and self.no_button.winfo_exists():
             self.no_button.destroy()
 
         self.canvas.create_text(
@@ -509,6 +709,10 @@ class LoveDebugger:
             font=("Consolas", 12)
         )
 
+        # =========================
+        # YES BUTTON
+        # =========================
+
         self.yes_button = tk.Button(
             self.root,
             text="YES",
@@ -526,6 +730,10 @@ class LoveDebugger:
             x=180,
             y=380
         )
+
+        # =========================
+        # NO BUTTON
+        # =========================
 
         self.no_button = tk.Button(
             self.root,
@@ -551,6 +759,10 @@ class LoveDebugger:
             self.move_no_button
         )
 
+    # =========================
+    # EMINEM POP ANIMATION
+    # =========================
+
     def animate_eminem_pop(self, index):
         if self._closing or not self.eminem_frames:
             return
@@ -575,27 +787,40 @@ class LoveDebugger:
 
         self.no_attempts += 1
 
+        # Eskalasi pesan & variasi stiker yang jauh lebih kaya
         if self.no_attempts == 1:
             message = "Nice try."
+            sticker = self.stickers.get("side_eye")
         elif self.no_attempts == 2:
             message = "Still trying!"
+            sticker = self.stickers.get("raised_eyebrow")
         elif self.no_attempts == 3:
             message = "Bro... seriously?"
+            sticker = self.stickers.get("clown")
         elif self.no_attempts == 4:
             message = "Bro... you really said NO?"
+            sticker = self.stickers.get("crying_barbie")
         elif self.no_attempts == 5:
             message = "I'm not giving up."
+            sticker = self.stickers.get("pleading_face")
         elif self.no_attempts == 6:
             message = "You're running out of options."
+            sticker = self.stickers.get("crying_cat")
         elif self.no_attempts == 7:
             message = "Just click YES already!"
+            sticker = self.stickers.get("donkey_face")
+        elif self.no_attempts == 8:
+            message = "Why do you hurt me like this?"
+            sticker = self.stickers.get("loudly_crying")
         else:
             message = "There is only one answer."
+            sticker = self.stickers.get("skull") or self.stickers.get("broken_heart")
 
+        # Zona eksklusi agar tombol NO tidak menutupi tombol YES
         yes_x, yes_y = 180, 380
         yes_w, yes_h = 100, 40
 
-        for _ in range(20):
+        for _ in range(25):
             new_x = random.randint(0, 500)
             new_y = random.randint(0, 440)
             if not (yes_x - 100 < new_x < yes_x + yes_w
@@ -612,22 +837,23 @@ class LoveDebugger:
             text=message
         )
 
-        current_width = self.yes_button.cget("width")
-        if current_width < 18:
-            self.yes_button.config(width=current_width + 1)
+        # Tombol YES bertambah besar bertahap
+        try:
+            current_width = self.yes_button.cget("width")
+            if current_width < 18:
+                self.yes_button.config(width=current_width + 1)
+        except Exception:
+            pass
 
-        if self.no_attempts >= 4:
-            if self.no_attempts == 4:
-                self.show_no_meme(self.img_crying_barbie)
-            else:
-                self.show_no_meme(self.img_donkey_face)
+        # Tampilkan stiker meme reaksi di samping pesan
+        if sticker:
+            self.show_no_meme(sticker)
 
     def show_no_meme(self, image):
         if self._closing or image is None:
             return
 
         message_coords = self.canvas.bbox(self.no_message)
-
         if not message_coords:
             return
 
@@ -637,8 +863,9 @@ class LoveDebugger:
         x = message_coords[2] + sticker_x_offset
         y = (message_coords[1] + message_coords[3]) // 2 + sticker_y_offset
 
-        if x > 570:
-            x = message_coords[0] - 28
+        # Cegah keluar canvas di sisi kanan / kiri
+        if x > 560:
+            x = max(50, message_coords[0] - 40)
 
         if self.no_meme_item is None:
             self.no_meme_item = self.canvas.create_image(
@@ -661,6 +888,7 @@ class LoveDebugger:
         if self._closing:
             return
 
+        self.play_error_sfx()
         self.no_button.destroy()
 
         self.canvas.create_text(
@@ -673,16 +901,20 @@ class LoveDebugger:
 
         self.root.after(
             1000,
-            self.show_confession
+            lambda: self.fade_to(self.show_confession)
         )
+
+    # =========================
+    # YES
+    # =========================
 
     def answer_yes(self):
         if self._closing:
             return
 
-        self.yes_button.destroy()
-
-        if hasattr(self, "no_button"):
+        if hasattr(self, "yes_button") and self.yes_button.winfo_exists():
+            self.yes_button.destroy()
+        if hasattr(self, "no_button") and self.no_button.winfo_exists():
             self.no_button.destroy()
 
         self.glitch_active = False
@@ -724,6 +956,10 @@ class LoveDebugger:
         self.hearts_active = True
         self.spawn_hearts()
 
+    # =========================
+    # FLOATING HEARTS EFFECT
+    # =========================
+
     def spawn_hearts(self):
         if self._closing:
             return
@@ -760,6 +996,10 @@ class LoveDebugger:
             self.root.after(30, lambda: self.animate_heart(heart, speed, drift))
         else:
             self.canvas.delete(heart)
+
+    # =========================
+    # BOOT SCREEN
+    # =========================
 
     def show_boot_screen(self):
         self.draw_scanlines()
@@ -803,6 +1043,10 @@ class LoveDebugger:
             callback=lambda: self.root.after(500, self.update_progress)
         )
 
+
+# =========================
+# MAIN
+# =========================
 
 if __name__ == "__main__":
     root = tk.Tk()
